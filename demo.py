@@ -11,6 +11,7 @@ import gradio as gr
 from peng_utils import TestBlip2, TestMiniGPT4, TestMplugOwl, TestMultimodelGPT, TestOtter, TestFlamingo
 
 LOGDIR = '/data1/VLP_web_data/vote_data'
+os.makedirs(LOGDIR, exist_ok=True)
 enable_btn = gr.Button.update(interactive=True)
 disable_btn = gr.Button.update(interactive=False)
 device = torch.device('cuda:4')
@@ -27,8 +28,7 @@ vlp_models = {
 def save_vote_data(state):
     t = datetime.datetime.now()
     log_name = os.path.join(LOGDIR, f"{t.year}-{t.month:02d}-{t.day:02d}-conv.json")
-    open_mode = 'a' if os.path.exists(log_name) else 'w'
-    with open(log_name, open_mode) as fout:
+    with open(log_name, 'a') as fout:
         state['image'] = np.array(state['image'], dtype='uint8').tolist()
         fout.write(json.dumps(state) + "\n")
 

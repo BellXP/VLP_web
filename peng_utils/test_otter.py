@@ -28,6 +28,9 @@ class TestOtter:
             )
             output = self.model.text_tokenizer.decode(generated_text[0])
             self.model = self.model.to('cpu')
+            output = [x for x in output.split(' ') if not x.startswith('<')]
+            out_label = output.index('GPT:')
+            output = ' '.join(output[out_label + 1:])
             
             return output
         except Exception as e:

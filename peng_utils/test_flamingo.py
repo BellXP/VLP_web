@@ -28,6 +28,9 @@ class TestFlamingo:
             )
             output = self.model.text_tokenizer.decode(generated_text[0])
             self.model = self.model.to('cpu')
+            begin_label = output.lower().find('<answer>')
+            end_label = output.lower().find('</answer>')
+            output = output[begin_label + 8: end_label].strip()
             
             return output
         except Exception as e:

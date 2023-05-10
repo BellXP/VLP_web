@@ -28,12 +28,9 @@ class TestMplugOwl:
             }
 
             if device is not None and 'cuda' in device.type:
-                dtype = torch.bfloat16
-                self.model = self.model.to(device, dtype=dtype)
-            else:
-                dtype = torch.float32
+                self.model = self.model.to(device)
             
-            generated_text = do_generate(prompts, [image], self.model, self.tokenizer, self.img_processor, **generate_config, device=device, dtype=dtype)
+            generated_text = do_generate(prompts, [image], self.model, self.tokenizer, self.img_processor, **generate_config, device=device, dtype=torch.float32)
             self.model = self.model.to('cpu').float()
 
             return generated_text

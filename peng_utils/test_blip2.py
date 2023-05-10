@@ -12,16 +12,12 @@ class TestBlip2:
         try:
             if device is not None and 'cuda' in device.type:
                 self.model = self.model.to(device)
-            else:
-                device = 'cpu'
             
             image = self.vis_processors["eval"](raw_image).unsqueeze(0).to(self.model.device)
             answer = self.model.generate({
                 "image": image, "prompt": f"Question: {question} Answer:"
             })
-
             self.model = self.model.to('cpu')
-            self.model.Qformer = self.model.Qformer.to('cpu')
             
             return answer[0]
         except Exception as e:

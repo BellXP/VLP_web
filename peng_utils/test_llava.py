@@ -75,11 +75,9 @@ class TestLLaVA:
     def generate(self, text_input, image=None, device=None):
         try:
             if device is not None and 'cuda' in device.type:
-                dtype = torch.float16
-                self.model = self.model.to(device, dtype=dtype)
+                self.model = self.model.to(device)
             else:
                 device = 'cpu'
-                dtype = torch.float32
 
             qs = text_input
             cur_prompt = qs
@@ -98,7 +96,7 @@ class TestLLaVA:
 
             if image is not None:
                 image_tensor = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                images = image_tensor.unsqueeze(0).to(device, dtype=dtype)
+                images = image_tensor.unsqueeze(0).to(device)
             else:
                 images = None
             

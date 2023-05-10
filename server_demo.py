@@ -39,7 +39,7 @@ def save_vote_data(state, request: gr.Request):
     t = datetime.datetime.now()
     # save image
     img_name = os.path.join(CONVERSATION_SAVE_DIR, 'images', f"{t.year}-{t.month:02d}-{t.day:02d}-{str(uuid.uuid4())}.png")
-    while os.path.exists(image):
+    while os.path.exists(img_name):
         img_name = os.path.join(CONVERSATION_SAVE_DIR, 'images', f"{t.year}-{t.month:02d}-{t.day:02d}-{str(uuid.uuid4())}.png")
     image = np.array(state.pop('image'), dtype='uint8')
     image = Image.fromarray(image.astype('uint8')).convert('RGB')

@@ -10,6 +10,6 @@ raw_image = Image.open('merlion.png').convert('RGB')
 question = "which city is this?"
 
 
-test_model = TestOtter()
-print(test_model.generate(question, raw_image, device))
+test_model = TestMiniGPT4()
+# print(test_model.generate(question, raw_image, device))
 print(test_model.generate(question, raw_image))

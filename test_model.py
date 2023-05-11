@@ -1,15 +1,20 @@
 import torch
-import requests
+import argparse
 from PIL import Image
-from peng_utils import TestBlip2, TestMiniGPT4, TestMplugOwl, TestMultimodelGPT, TestOtter, TestFlamingo
-
-device = torch.device('cuda:0')
-img_url = 'https://storage.googleapis.com/sfr-vision-language-research/LAVIS/assets/merlion.png'
-# raw_image = Image.open(requests.get(img_url, stream=True).raw).convert('RGB')
-raw_image = Image.open('merlion.png').convert('RGB')
-question = "which city is this?"
+from peng_utils import get_model
 
 
-tester = TestBlip2()
-output = tester.generate(question, raw_image, device)
-print(output)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-name", type=str, default='owl')
+    parser.add_argument("--device", type=int, default=-1)
+    parser.add_argument("--image-path", type=str, default='examples/kun_basketball.jpg')
+    args = parser.parse_args()
+
+    device = torch.device('cpu' if args.device == -1 else f'cuda:{args.device}')
+    tester = get_model(args.model_name)
+
+    image = Image.open('examples/kun_basketball.jpg').convert('RGB')
+    question = "Is the man good at playing basketball?"
+    output = tester.generate(question, image, device)
+    print(output)

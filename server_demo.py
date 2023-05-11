@@ -177,7 +177,7 @@ def run_VLP_models(state, chatbot_A, chatbot_B):
 
 
 def build_demo():
-    with gr.Blocks(theme='snehilsanyal/scikit-learn', label='Multimodality Chatbot Arena') as demo:
+    with gr.Blocks(theme='snehilsanyal/scikit-learn', title='Multimodality Chatbot Arena') as demo:
         state = gr.State({})
 
         with gr.Row():

@@ -2,3 +2,4 @@
 __pycache__
 reference_projects
 *.log
+.tmp_img.png

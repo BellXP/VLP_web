@@ -2,8 +2,11 @@ CONTROLLER_HEART_BEAT_EXPIRATION = 90
 WORKER_HEART_BEAT_INTERVAL = 30
 WORKER_API_TIMEOUT = 2000
 
-LOGDIR = "/home/xupeng/VLP_web/server_utils/runtime_log"
-CONVERSATION_SAVE_DIR = '/nvme/data1/VLP_web_data/conversation_data'
+
+LOGDIR = "server_utils/runtime_log"
+
+from peng_utils import DATA_DIR
+CONVERSATION_SAVE_DIR = f'{DATA_DIR}/conversation_data'
 
 
 rules_markdown = """ ### Rules

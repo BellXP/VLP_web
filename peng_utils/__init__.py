@@ -1,3 +1,5 @@
+DATA_DIR = '/root/VLP_web_data'
+
 from .test_blip2 import TestBlip2
 from .test_llava import TestLLaVA
 from .test_minigpt4 import TestMiniGPT4
@@ -30,6 +32,8 @@ def get_model(model_name):
         return TestOtter()
     elif model_name == 'flamingo':
         return TestFlamingo()
+    elif model_name == 'llava':
+        return TestLLaVA()
     else:
         raise ValueError(f"Invalid model_name: {model_name}")
 

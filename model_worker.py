@@ -195,7 +195,7 @@ if __name__ == "__main__":
     parser.add_argument("--keep-in-device", action="store_true")
     args = parser.parse_args()
 
-    logger = build_logger("model_worker", f"{LOGDIR}/model_worker_{args.model_name}.log")
+    logger = build_logger("model_worker", f"model_worker_{args.model_name}.log")
     logger.info(f"args: {args}")
 
     if args.model_name == 'owl':

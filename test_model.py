@@ -8,7 +8,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-name", type=str, default='owl')
     parser.add_argument("--device", type=int, default=-1)
-    parser.add_argument("--image-path", type=str, default='examples/kun_basketball.jpg')
     args = parser.parse_args()
 
     device = torch.device('cpu' if args.device == -1 else f'cuda:{args.device}')

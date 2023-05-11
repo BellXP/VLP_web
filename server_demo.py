@@ -23,7 +23,7 @@ from server_utils.utils import build_logger, server_error_msg
 
 os.makedirs(CONVERSATION_SAVE_DIR, exist_ok=True)
 os.makedirs(f"{CONVERSATION_SAVE_DIR}/images", exist_ok=True)
-logger = build_logger("web_server", f"{LOGDIR}/web_server.log")
+logger = build_logger("web_server", "web_server.log")
 headers = {"User-Agent": "fastchat Client"}
 model_list = []
 controller_url = None
@@ -69,7 +69,7 @@ def save_vote_data(state, request: gr.Request):
         log_data = state.copy()
         log_data['image'] = img_name
         log_data['ip'] = request.client.host
-        fout.write(json.dumps(state) + "\n")
+        fout.write(json.dumps(log_data) + "\n")
 
 
 def vote_left_model(state, model_name_A, model_name_B, request: gr.Request):

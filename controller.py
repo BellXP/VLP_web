@@ -19,7 +19,7 @@ import uvicorn
 from server_utils.constants import CONTROLLER_HEART_BEAT_EXPIRATION, LOGDIR
 from server_utils.utils import build_logger, server_error_msg
 
-logger = build_logger("controller", f"{LOGDIR}/controller.log")
+logger = build_logger("controller", f"controller.log")
 
 
 class DispatchMethod(Enum):

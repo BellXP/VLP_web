@@ -1,8 +1,9 @@
 import torch
 from .mplug_owl.interface import do_generate, get_model
+from peng_utils import DATA_DIR
 
-TOKENIZER_PATH = '/nvme/data1/VLP_web_data/mPLUG-Owl-model/tokenizer.model'
-CHECKPOINT_PATH = '/nvme/data1/VLP_web_data/mPLUG-Owl-model/instruction_tuned.pth' # pretrained.pth, instruction_tuned.pth
+TOKENIZER_PATH = f'{DATA_DIR}/mPLUG-Owl-model/tokenizer.model'
+CHECKPOINT_PATH = f'{DATA_DIR}/mPLUG-Owl-model/pretrained.pth' # pretrained.pth, instruction_tuned.pth
 
 
 class TestMplugOwl:
@@ -25,25 +26,25 @@ class TestMplugOwl:
         return device, dtype
 
     def generate(self, text_input, image, device=None, keep_in_device=False):
-        # try:
-        prompts = [f'''
-            The following is a conversation between a curious human and AI assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
-            Human: <image>
-            Human: {text_input}
-        ''']
+        try:
+            prompts = [f'''
+                The following is a conversation between a curious human and AI assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
+                Human: <image>
+                Human: {text_input}
+            ''']
 
-        generate_config = {
-            "top_k": 5, 
-            "max_length": 512,
-            "do_sample":True
-        }
+            generate_config = {
+                "top_k": 5, 
+                "max_length": 512,
+                "do_sample":True
+            }
 
-        device, dtype = self.move_to_device(device)
-        generated_text = do_generate(prompts, [image], self.model, self.tokenizer, self.img_processor, **generate_config, device=device, dtype=dtype)
+            device, dtype = self.move_to_device(device)
+            generated_text = do_generate(prompts, [image], self.model, self.tokenizer, self.img_processor, **generate_config, device=device, dtype=dtype)
 
-        if not keep_in_device:
-            self.model = self.model.to('cpu', dtype=torch.float32)
+            if not keep_in_device:
+                self.model = self.model.to('cpu', dtype=torch.float32)
 
-        return generated_text
-        # except Exception as e:
-        #     return getattr(e, 'message', str(e))
+            return generated_text
+        except Exception as e:
+            return getattr(e, 'message', str(e))

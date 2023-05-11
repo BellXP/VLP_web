@@ -43,7 +43,7 @@ class KeywordsStoppingCriteria(StoppingCriteria):
 
 
 class TestLLaVA:
-    def __init__(self, model_path="liuhaotian/LLaVA-Lightning-7B-delta-v1-1"):
+    def __init__(self, model_path="liuhaotian/LLaVA-Lightning-MPT-7B-preview"):
         device, dtype = 'cpu', torch.float32
 
         tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -51,7 +51,7 @@ class TestLLaVA:
         model = LlavaLlamaForCausalLM.from_pretrained(model_path, torch_dtype=dtype)
         image_processor = CLIPImageProcessor.from_pretrained(model.config.mm_vision_tower, torch_dtype=dtype)
 
-        mm_use_im_start_end = False # getattr(model.config, "mm_use_im_start_end", False)
+        mm_use_im_start_end = False
         tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
         if mm_use_im_start_end:
             tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
@@ -70,24 +70,32 @@ class TestLLaVA:
         self.image_processor = image_processor
         self.mm_use_im_start_end = mm_use_im_start_end
         self.image_token_len = image_token_len # 256
-        self.conv_mode = 'simple'
+        self.conv_mode = 'mpt_multimodal' # mpt, mpt_text, mpt_multimodal
 
-    def generate(self, text_input, image=None, device=None):
+    def move_to_device(self, device=None):
+        if device is not None and 'cuda' in device.type:
+            dtype = torch.float16
+            self.model = self.model.to(device, dtype=dtype)
+            self.model.model.vision_tower[0].to(device, dtype=dtype)
+            self.image_processor = CLIPImageProcessor.from_pretrained(self.model.config.mm_vision_tower, torch_dtype=dtype)
+        else:
+            dtype = torch.float32
+            device = 'cpu'
+            self.model = self.model.to(device, dtype=dtype)
+            self.model.model.vision_tower[0].to(device, dtype=dtype)
+            self.image_processor = CLIPImageProcessor.from_pretrained(self.model.config.mm_vision_tower, torch_dtype=dtype)
+        
+        return device, dtype
+
+    def generate(self, text_input, image=None, device=None, keep_in_device=False):
         try:
-            if device is not None and 'cuda' in device.type:
-                self.model = self.model.to(device)
-            else:
-                device = 'cpu'
-
+            device, dtype = self.move_to_device(device)
             qs = text_input
-            cur_prompt = qs
             if self.mm_use_im_start_end:
                 qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * self.image_token_len + DEFAULT_IM_END_TOKEN
             else:
                 qs = qs + '\n' + DEFAULT_IMAGE_PATCH_TOKEN * self.image_token_len
 
-            if self.conv_mode == 'simple_legacy':
-                qs += '\n\n### Response:'
             conv = conv_templates[self.conv_mode].copy()
             conv.append_message(conv.roles[0], qs)
             prompt = conv.get_prompt()
@@ -96,11 +104,11 @@ class TestLLaVA:
 
             if image is not None:
                 image_tensor = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                images = image_tensor.unsqueeze(0).to(device)
+                images = image_tensor.unsqueeze(0).to(device, dtype=dtype)
             else:
                 images = None
             
-            keywords = ['###']
+            keywords = [conv.sep] if conv.sep2 is None else [conv.sep, conv.sep2]
             stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, input_ids)
 
             with torch.inference_mode():
@@ -118,18 +126,6 @@ class TestLLaVA:
                 print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
             outputs = self.tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
 
-            print(f'Check outputs: {outputs}')
-
-            if self.conv_mode == 'simple_legacy':
-                while True:
-                    cur_len = len(outputs)
-                    outputs = outputs.strip()
-                    for pattern in ['###', 'Assistant:', 'Response:']:
-                        if outputs.startswith(pattern):
-                            outputs = outputs[len(pattern):].strip()
-                    if len(outputs) == cur_len:
-                        break
-
             try:
                 index = outputs.index(conv.sep)
             except ValueError:
@@ -137,7 +133,9 @@ class TestLLaVA:
                 index = outputs.index(conv.sep)
 
             outputs = outputs[:index].strip()
-
+            if not keep_in_device:
+                self.move_to_device()
+            
             return outputs
         except Exception as e:
             return getattr(e, 'message', str(e))

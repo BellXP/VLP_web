@@ -1,14 +1,15 @@
 CONTROLLER_HEART_BEAT_EXPIRATION = 90
 WORKER_HEART_BEAT_INTERVAL = 30
-WORKER_API_TIMEOUT = 20
+WORKER_API_TIMEOUT = 2000
 
 LOGDIR = "/home/xupeng/VLP_web/server_utils/runtime_log"
 CONVERSATION_SAVE_DIR = '/nvme/data1/VLP_web_data/conversation_data'
 
 
 rules_markdown = """ ### Rules
-- Vote for large multi-modality models on visual question answering.
-- Load an image and ask a question. Only one question is supported per round.
+- Vote for large multi-modality models on VQA.
+- Load an image and ask a question or click following examples. 
+- Only one question is supported per round.
 - Two models are anonymous before your vote.
 - Click “Clear history” to start a new round.
 - [[GitHub]](https://github.com/OpenGVLab/Multi-modality-Arena)
@@ -16,7 +17,7 @@ rules_markdown = """ ### Rules
 
 
 notice_markdown = """ ### Terms of use
-By using this service, users are required to agree to the following terms: The service is a research preview intended for non-commercial use only. It only provides limited safety measures and may generate offensive content. It must not be used for any illegal, harmful, violent, racist, or sexual purposes. **The service collects user dialogue data and reserves the right to distribute it under a Creative Commons Attribution (CC-BY) license.** The demo works better on desktop devices with a wide screen.
+To use this service, users must agree to the following conditions: This service is an experimental research tool for non-commercial purposes only. It has limited safeguards and may generate inappropriate content. It cannot be used for anything illegal, harmful, violent, racist or sexual. The service collects data on user conversations and may distribute this data under a Creative Commons Attribution (CC-BY) license.
 """
 
 

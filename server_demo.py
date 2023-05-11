@@ -120,11 +120,12 @@ def user_ask(state, chatbot_A, chatbot_B, textbox, imagebox):
         return state, chatbot_A, chatbot_B, "", "", textbox, imagebox, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn
     if imagebox is not None:
         state['image'] = np.array(imagebox, dtype='uint8').tolist()
-        imagebox.save('.tmp_img.png')
     state['text'] = textbox
     state['get_input'] = True
     selected_VLP_models = random.sample(model_list, 2)
     state['VLP_names'] = selected_VLP_models
+    image = np.array(state['image'], dtype='uint8')
+    Image.fromarray(image.astype('uint8')).convert('RGB').save('.tmp_img.png')
     chatbot_A = chatbot_A + [(('.tmp_img.png',), None), (textbox, None), (None, None)]
     chatbot_B = chatbot_B + [(('.tmp_img.png',), None), (textbox, None), (None, None)]
     return state, chatbot_A, chatbot_B, gr.update(value=None), gr.update(value=None), gr.update(value=None, interactive=True), gr.update(value=None, interactive=True), disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn

@@ -188,7 +188,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=12002)
     parser.add_argument("--controller-address", type=str, default="http://localhost:12001")
-    parser.add_argument("--limit-model-concurrency", type=int, default=5)
+    parser.add_argument("--limit-model-concurrency", type=int, default=1)
     parser.add_argument("--no-register", action="store_true")
     parser.add_argument("--model-name", type=str, help="Optional display name")
     parser.add_argument("--device", type=int, default=-1)
@@ -197,6 +197,9 @@ if __name__ == "__main__":
 
     logger = build_logger("model_worker", f"{LOGDIR}/model_worker_{args.model_name}.log")
     logger.info(f"args: {args}")
+
+    if args.model_name == 'owl':
+        WORKER_HEART_BEAT_INTERVAL = 60
 
     device = 'cpu' if args.device == -1 else f'cuda:{args.device}'
     worker = ModelWorker(

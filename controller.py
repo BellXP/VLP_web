@@ -227,36 +227,6 @@ class Controller:
         except requests.exceptions.RequestException as e:
             yield self.handle_worker_timeout(worker_addr, server_error_msg)
 
-    def worker_api_generate_completion(self, params):
-        worker_addr = self.get_worker_address(params["model"])
-        if not worker_addr:
-            return self.handle_no_worker(params, server_error_msg)
-
-        try:
-            response = requests.post(
-                worker_addr + "/worker_generate_completion",
-                json=params,
-                timeout=15,
-            )
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            return self.handle_worker_timeout(worker_addr, server_error_msg)
-
-    def worker_api_embeddings(self, params):
-        worker_addr = self.get_worker_address(params["model"])
-        if not worker_addr:
-            return self.handle_no_worker(params, server_error_msg)
-
-        try:
-            response = requests.post(
-                worker_addr + "/worker_get_embeddings",
-                json=params,
-                timeout=15,
-            )
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            return self.handle_worker_timeout(worker_addr, server_error_msg)
-
     # Let the controller act as a worker to achieve hierarchical
     # management. This can be used to connect isolated sub networks.
     def worker_api_get_status(self):

@@ -8,7 +8,7 @@ from .minigpt4.conversation.conversation import Chat, CONV_VISION
 from .minigpt4.models import *
 from .minigpt4.processors import *
 
-CFG_PATH = '/data1/VLP_web_data/MiniGPT-4/minigpt4_eval.yaml'
+CFG_PATH = 'peng_utils/minigpt4/minigpt4_eval.yaml'
 
 
 class TestMiniGPT4:
@@ -22,23 +22,36 @@ class TestMiniGPT4:
         self.model, self.vis_processor = model, vis_processor
         self.model.llama_model = self.model.llama_model.float().to('cpu')
         self.chat = Chat(model, vis_processor, device='cpu')
-    
-    def generate(self, text, image=None, device=None):
-        try:
-            if device is not None and 'cuda' in device.type:
-                self.chat.device = device
-                self.model = self.model.to(device)
-                self.chat.move_stopping_criteria_device(device)
 
+    def move_to_device(self, device):
+        if device is not None and 'cuda' in device.type:
+            dtype = torch.float16
+            self.chat.device = device
+            self.model = self.model.to(device, dtype=dtype)
+            self.chat.move_stopping_criteria_device(device, dtype=dtype)
+        else:
+            dtype = torch.float32
+            device = 'cpu'
+            self.chat.device = 'cpu'
+            self.model = self.model.to('cpu', dtype=dtype)
+            self.chat.move_stopping_criteria_device('cpu', dtype=dtype)
+        
+        return device, dtype
+    
+    def generate(self, text, image=None, device=None, keep_in_device=False):
+        try:
+            device, dtype = self.move_to_device(device)
             chat_state = CONV_VISION.copy()
             img_list = []
             if image is not None:
                 self.chat.upload_img(image, chat_state, img_list)
             self.chat.ask(text, chat_state)
             llm_message = self.chat.answer(conv=chat_state, img_list=img_list)[0]
-            self.chat.device = 'cpu'
-            self.model = self.model.to('cpu')
-            self.chat.move_stopping_criteria_device('cpu')
+            
+            if not keep_in_device:
+                self.chat.device = 'cpu'
+                self.model = self.model.to('cpu', dtype=torch.float32)
+                self.chat.move_stopping_criteria_device('cpu', dtype=torch.float32)
 
             return llm_message
         except Exception as e:

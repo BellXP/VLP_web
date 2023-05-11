@@ -13,7 +13,7 @@ model:
   num_query_token: 32
 
   # Vicuna
-  llama_model: "wangrongsheng/MiniGPT-4-LLaMA-7B" # "lmsys/vicuna-7b-delta-v0"
+  llama_model: "wangrongsheng/MiniGPT-4-LLaMA-7B"
 
   # generation configs
   prompt: ""

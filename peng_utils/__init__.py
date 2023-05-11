@@ -39,10 +39,10 @@ def get_device_name(device: torch.device):
 
 
 @torch.inference_mode()
-def generate_stream(model, text, image, device=None):
+def generate_stream(model, text, image, device=None, keep_in_device=False):
     image = np.array(image, dtype='uint8')
     image = Image.fromarray(image.astype('uint8')).convert('RGB')
-    output = model.generate(text, image, device)
+    output = model.generate(text, image, device, keep_in_device)
     print(f"{'#' * 20} Model out: {output}")
     gc.collect()
     torch.cuda.empty_cache()

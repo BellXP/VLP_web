@@ -15,10 +15,14 @@ import gradio as gr
 import numpy as np
 from PIL import Image
 
-from server_utils.constants import LOGDIR, WORKER_API_TIMEOUT, CONVERSATION_SAVE_DIR
+from server_utils.constants import (
+    LOGDIR, WORKER_API_TIMEOUT, CONVERSATION_SAVE_DIR,
+    rules_markdown, notice_markdown, license_markdown
+)
 from server_utils.utils import build_logger, server_error_msg
 
 os.makedirs(CONVERSATION_SAVE_DIR, exist_ok=True)
+os.makedirs(f"{CONVERSATION_SAVE_DIR}/images", exist_ok=True)
 logger = build_logger("web_server", f"{LOGDIR}/web_server.log")
 headers = {"User-Agent": "fastchat Client"}
 model_list = []
@@ -26,6 +30,14 @@ controller_url = None
 no_change_btn = gr.Button.update()
 enable_btn = gr.Button.update(interactive=True)
 disable_btn = gr.Button.update(interactive=False)
+
+model_info = {
+    'blip2': 'BLIP2-flan-t5-xl',
+    'flamingo': 'OpenFlamingo-9B',
+    'minigpt4': 'MiniGPT-4-7B',
+    'owl': 'mPLUG-Owl-Pretrained',
+    'otter': 'Otter-9B'
+}
 
 
 def get_model_list(controller_url):
@@ -35,65 +47,87 @@ def get_model_list(controller_url):
     return list(set(ret.json()["models"]))
 
 
+def get_model_worker_addr(model_name):
+    ret = requests.post(
+        controller_url + "/get_worker_address", json={"model": model_name}
+    )
+    return ret.json()["address"]
+
+
 def save_vote_data(state, request: gr.Request):
     t = datetime.datetime.now()
     # save image
     img_name = os.path.join(CONVERSATION_SAVE_DIR, 'images', f"{t.year}-{t.month:02d}-{t.day:02d}-{str(uuid.uuid4())}.png")
     while os.path.exists(img_name):
         img_name = os.path.join(CONVERSATION_SAVE_DIR, 'images', f"{t.year}-{t.month:02d}-{t.day:02d}-{str(uuid.uuid4())}.png")
-    image = np.array(state.pop('image'), dtype='uint8')
+    image = np.array(state['image'], dtype='uint8')
     image = Image.fromarray(image.astype('uint8')).convert('RGB')
     image.save(img_name)
     # save conversation
-    state['image'] = img_name
     log_name = os.path.join(CONVERSATION_SAVE_DIR, f"{t.year}-{t.month:02d}-{t.day:02d}-conversation.json")
     with open(log_name, 'a') as fout:
-        state['ip'] = request.client.host
+        log_data = state.copy()
+        log_data['image'] = img_name
+        log_data['ip'] = request.client.host
         fout.write(json.dumps(state) + "\n")
 
 
-def vote_up_model(state, chatbot, request: gr.Request):
-    state['user_vote'] = 'up'
+def vote_left_model(state, model_name_A, model_name_B, request: gr.Request):
+    state['user_vote'] = 'left'
+    model_name_A = f"""**Model A: {model_info[state['VLP_names'][0]]}**"""
+    model_name_B = f"""**Model B: {model_info[state['VLP_names'][1]]}**"""
     save_vote_data(state, request)
-    chatbot.append((
-        'Your Vote: Up!',
-        f"Up Model: {state['VLP_names'][0]}, Down Model: {state['VLP_names'][1]}"
-    ))
-    return chatbot, disable_btn, disable_btn, disable_btn, enable_btn
+    return model_name_A, model_name_B, disable_btn, disable_btn, disable_btn, disable_btn
 
 
-def vote_down_model(state, chatbot, request: gr.Request):
-    state['user_vote'] = 'down'
+def vote_right_model(state, model_name_A, model_name_B, request: gr.Request):
+    state['user_vote'] = 'right'
+    model_name_A = f"""**Model A: {model_info[state['VLP_names'][0]]}**"""
+    model_name_B = f"""**Model B: {model_info[state['VLP_names'][1]]}**"""
     save_vote_data(state, request)
-    chatbot.append((
-        'Your Vote: Down!',
-        f"Up Model: {state['VLP_names'][0]}, Down Model: {state['VLP_names'][1]}"
-    ))
-    return chatbot, disable_btn, disable_btn, disable_btn, enable_btn
+    return model_name_A, model_name_B, disable_btn, disable_btn, disable_btn, disable_btn
 
 
-def vote_model_tie(state, chatbot, request: gr.Request):
+def vote_model_tie(state, model_name_A, model_name_B, request: gr.Request):
     state['user_vote'] = 'tie'
+    model_name_A = f"""**Model A: {model_info[state['VLP_names'][0]]}**"""
+    model_name_B = f"""**Model B: {model_info[state['VLP_names'][1]]}**"""
     save_vote_data(state, request)
-    chatbot.append((
-        'Your Vote: Tie!',
-        f"Up Model: {state['VLP_names'][0]}, Down Model: {state['VLP_names'][1]}"
-    ))
-    return chatbot, disable_btn, disable_btn, disable_btn, enable_btn
+    return model_name_A, model_name_B, disable_btn, disable_btn, disable_btn, disable_btn
+
+
+def vote_model_bad(state, model_name_A, model_name_B, request: gr.Request):
+    state['user_vote'] = 'bad'
+    model_name_A = f"""**Model A: {model_info[state['VLP_names'][0]]}**"""
+    model_name_B = f"""**Model B: {model_info[state['VLP_names'][1]]}**"""
+    save_vote_data(state, request)
+    return model_name_A, model_name_B, disable_btn, disable_btn, disable_btn, disable_btn
 
 
 def clear_chat(state):
     if state is not None:
         state = {}
-    return state, None, gr.update(value=None, interactive=True), gr.update(placeholder="Enter text and press ENTER"), disable_btn, disable_btn, disable_btn, enable_btn
+    return state, None, None, gr.update(value=None), gr.update(value=None), gr.update(value=None, interactive=True), gr.update(value=None, interactive=True), disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, enable_btn
 
 
-def user_ask(state, chatbot, text_box):
-    state['text'] = text_box
-    if text_box == '':
-        return state, chatbot, '', enable_btn
-    chatbot = chatbot + [[text_box, None], [text_box, None]] 
-    return state, chatbot, '', disable_btn
+def share_click(state):
+    return state
+
+
+def user_ask(state, chatbot_A, chatbot_B, textbox, imagebox):
+    if (textbox == '' is None) or (imagebox is None and 'image' not in state):
+        state['get_input'] = False
+        return state, chatbot_A, chatbot_B, "", "", textbox, imagebox, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn
+    if imagebox is not None:
+        state['image'] = np.array(imagebox, dtype='uint8').tolist()
+    state['text'] = textbox
+    state['get_input'] = True
+    selected_VLP_models = random.sample(model_list, 2)
+    state['VLP_names'] = selected_VLP_models
+    imagebox.save('.tmp_img.png')
+    chatbot_A = chatbot_A + [(('.tmp_img.png',), None), (textbox, None), (None, None)]
+    chatbot_B = chatbot_B + [(('.tmp_img.png',), None), (textbox, None), (None, None)]
+    return state, chatbot_A, chatbot_B, gr.update(value=None), gr.update(value=None), gr.update(value=None, interactive=True), gr.update(value=None, interactive=True), disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn
 
 
 def model_worker_stream_iter(worker_addr, state):
@@ -121,66 +155,88 @@ def get_model_worker_output(worker_input):
             elif data["error_code"] == 1:
                 output = data["text"] + f" (error_code: {data['error_code']})"
                 return output
-            time.sleep(5)
+            time.sleep(0.02)
     except requests.exceptions.RequestException as e:
         output = server_error_msg + f" (error_code: 4)"
         return output
     except Exception as e:
         output = server_error_msg + f" (error_code: 5, {e})"
         return output
+    
 
-
-def run_VLP_models(state, chatbot, gr_img):
-    def get_model_worker_addr(model_name):
-        ret = requests.post(
-            controller_url + "/get_worker_address", json={"model": model_name}
-        )
-        return ret.json()["address"]
-
-    if state['text'] == '' or gr_img is None:
-        return state, chatbot, enable_btn, disable_btn, disable_btn, disable_btn, enable_btn
-    state['image'] = np.array(gr_img, dtype='uint8').tolist()
-    selected_VLP_models = random.sample(model_list, 2)
-    model_worker_addrs = [get_model_worker_addr(model_name) for model_name in selected_VLP_models]
+def run_VLP_models(state, chatbot_A, chatbot_B):
+    if 'get_input' not in state or not state['get_input']:
+        return state, chatbot_A, chatbot_B, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, disable_btn, enable_btn
+    model_worker_addrs = [get_model_worker_addr(model_name) for model_name in state['VLP_names']]
     pool = multiprocessing.Pool()
     vlp_outputs = pool.map(get_model_worker_output, [(worker_addr, state) for worker_addr in model_worker_addrs])
-    state['VLP_names'] = selected_VLP_models
     state['VLP_outputs'] = vlp_outputs
-    chatbot[-2][1] = vlp_outputs[0]
-    chatbot[-1][1] = vlp_outputs[1]
-    return state, chatbot, enable_btn, enable_btn, enable_btn, enable_btn, enable_btn
+    chatbot_A[-1][1] = vlp_outputs[0]
+    chatbot_B[-1][1] = vlp_outputs[1]
+    return state, chatbot_A, chatbot_B, enable_btn, enable_btn, enable_btn, enable_btn, enable_btn, enable_btn, enable_btn
 
 
 def build_demo():
-    with gr.Blocks() as demo:
+    with gr.Blocks(theme='snehilsanyal/scikit-learn', label='Multimodality Chatbot Arena') as demo:
         state = gr.State({})
 
         with gr.Row():
-            with gr.Column(scale=0.5):
-                imagebox = gr.Image(type="pil")
-                with gr.Row() as button_row:
-                    upvote_btn = gr.Button(value="👍  Upvote", interactive=False)
-                    downvote_btn = gr.Button(value="👎  Downvote", interactive=False)
+            gr.HTML(open("CVLAB/header.html", "r").read())
+        gr.Markdown(notice_markdown)
+
+        with gr.Box():
+            with gr.Row():
+                with gr.Column(scale=1):
+                    imagebox = gr.Image(type="pil")
+                    gr.Markdown(rules_markdown)
+                with gr.Column():
+                    model_name_A = gr.Markdown("")
+                    chatbot_A = gr.Chatbot(label='Model A').style(height=550)
+                with gr.Column():
+                    model_name_B = gr.Markdown("")
+                    chatbot_B = gr.Chatbot(label='Model B').style(height=550)
+            with gr.Box():
+                with gr.Row():
+                    leftvote_btn = gr.Button(value="👈  A is better", interactive=False)
+                    rightvote_btn = gr.Button(value="👉  B is better", interactive=False)
                     tie_btn = gr.Button(value="🤝  Tie", interactive=False)
-                    clear_btn = gr.Button(value="🗑️  Clear", interactive=False)
-            with gr.Column():
-                with gr.Row():
-                    chatbot = gr.Chatbot(label='ChatBox')
-                    # chatbot2 = gr.Chatbot(label='ChatBox')
-                with gr.Row():
-                    with gr.Column(scale=8):
-                        textbox = gr.Textbox(placeholder="Enter text and press ENTER")
-                    with gr.Column(scale=1, min_width=60):
-                        submit_btn = gr.Button(value="Submit")
+                    bothbad_btn = gr.Button(value="👎  Both are bad", interactive=False)
         
-        btn_list = [upvote_btn, downvote_btn, tie_btn, clear_btn]
-        textbox.submit(user_ask, [state, chatbot, textbox], [state, chatbot, textbox, submit_btn]).then(run_VLP_models, [state, chatbot, imagebox], [state, chatbot, submit_btn] + btn_list)
-        submit_btn.click(user_ask, [state, chatbot, textbox], [state, chatbot, textbox, submit_btn]).then(run_VLP_models, [state, chatbot, imagebox], [state, chatbot, submit_btn] + btn_list)
-        clear_btn.click(clear_chat, [state], [state, chatbot, imagebox, textbox] + btn_list)
-        upvote_btn.click(vote_up_model, [state, chatbot], [chatbot] + btn_list)
-        downvote_btn.click(vote_down_model, [state, chatbot], [chatbot] + btn_list)
-        tie_btn.click(vote_model_tie, [state, chatbot], [chatbot] + btn_list)
-    
+        with gr.Row():
+            with gr.Column(scale=20):
+                textbox = gr.Textbox(
+                    show_label=False,
+                    placeholder="Enter text and press ENTER"
+                ).style(container=False)
+            with gr.Column(scale=1, min_width=50):
+                send_btn = gr.Button(value="Send")
+        
+        with gr.Row():
+            regenerate_btn = gr.Button(value="🔄  Regenerate", interactive=False)
+            clear_btn = gr.Button(value="🗑️  Clear history", interactive=False)
+            share_btn = gr.Button(value="📷  Share")
+        
+        gr.Examples(examples=[
+            [f"examples/merlion.png", "Which city is this?"],
+            [f"examples/kun_basketball.jpg", "Is the man good at playing basketball?"]
+        ], inputs=[imagebox, textbox])
+        gr.Markdown(license_markdown)
+        
+        chat_list = [chatbot_A, chatbot_B]
+        model_name_list = [model_name_A, model_name_B]
+        state_list = [state] + chat_list
+        vote_list = [leftvote_btn, rightvote_btn, tie_btn, bothbad_btn]
+        btn_list = vote_list + [regenerate_btn, clear_btn, send_btn]
+        leftvote_btn.click(vote_left_model, [state] + model_name_list, model_name_list + vote_list)
+        rightvote_btn.click(vote_right_model, [state] + model_name_list, model_name_list + vote_list)
+        tie_btn.click(vote_model_tie, [state] + model_name_list, model_name_list + vote_list)
+        bothbad_btn.click(vote_model_bad, [state] + model_name_list, model_name_list + vote_list)
+        clear_btn.click(clear_chat, [state], state_list + model_name_list + [textbox, imagebox] + btn_list)
+        share_btn.click(share_click, [state], [state])
+        regenerate_btn.click(run_VLP_models, state_list, state_list + btn_list)
+        textbox.submit(user_ask, state_list + [textbox, imagebox], state_list + model_name_list + [textbox, imagebox] + btn_list).then(run_VLP_models, state_list, state_list + btn_list)
+        send_btn.click(user_ask, state_list + [textbox, imagebox], state_list + model_name_list + [textbox, imagebox] + btn_list).then(run_VLP_models, state_list, state_list + btn_list)
+
     return demo
 
 
@@ -188,7 +244,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=7860)
-    parser.add_argument("--controller-url", type=str, default="http://localhost:21001")
+    parser.add_argument("--controller-url", type=str, default="http://localhost:12001")
     parser.add_argument("--concurrency-count", type=int, default=10)
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()
@@ -197,6 +253,7 @@ if __name__ == "__main__":
     controller_url = args.controller_url
     model_list = get_model_list(controller_url)
     print(f"Available model: {', '.join(model_list)}")
+    assert len(model_list) >= 2, "Available model number should not smaller than 2."
     demo = build_demo()
     demo.queue(
         concurrency_count=args.concurrency_count, status_update_rate=10, api_open=False

@@ -19,8 +19,6 @@ from server_utils.constants import WORKER_HEART_BEAT_INTERVAL, LOGDIR
 from server_utils.utils import build_logger, server_error_msg, pretty_print_semaphore
 from peng_utils import get_model, get_device_name, generate_stream
 
-worker_id = str(uuid.uuid4())[:6]
-logger = build_logger("model_worker", f"{LOGDIR}/model_worker_{worker_id}.log")
 global_counter = 0
 model_semaphore = None
 
@@ -55,6 +53,9 @@ class ModelWorker:
             self.device_name = get_device_name(device)
         else:
             raise ValueError("Invalid device")
+        
+        if args.keep_in_device:
+            self.model.move_to_device(self.device)
 
         if not no_register:
             self.register_to_controller()
@@ -131,7 +132,8 @@ class ModelWorker:
                 self.model,
                 params['text'],
                 params['image'],
-                device
+                device,
+                args.keep_in_device
             ):
                 ret = {
                     "text": output,
@@ -184,20 +186,23 @@ async def api_get_status(request: Request):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="localhost")
-    parser.add_argument("--port", type=int, default=21002)
-    parser.add_argument("--controller-address", type=str, default="http://localhost:21001")
+    parser.add_argument("--port", type=int, default=12002)
+    parser.add_argument("--controller-address", type=str, default="http://localhost:12001")
     parser.add_argument("--limit-model-concurrency", type=int, default=5)
     parser.add_argument("--no-register", action="store_true")
     parser.add_argument("--model-name", type=str, help="Optional display name")
     parser.add_argument("--device", type=int, default=-1)
+    parser.add_argument("--keep-in-device", action="store_true")
     args = parser.parse_args()
+
+    logger = build_logger("model_worker", f"{LOGDIR}/model_worker_{args.model_name}.log")
     logger.info(f"args: {args}")
 
     device = 'cpu' if args.device == -1 else f'cuda:{args.device}'
     worker = ModelWorker(
         args.controller_address,
         f"http://{args.host}:{args.port}",
-        worker_id,
+        str(uuid.uuid4())[:6],
         args.no_register,
         [args.model_name, get_model(args.model_name)],
         device,

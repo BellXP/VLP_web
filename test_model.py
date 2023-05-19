@@ -16,4 +16,4 @@ if __name__ == "__main__":
     image = Image.open('examples/kun_basketball.jpg').convert('RGB')
     question = "Is the man good at playing basketball?"
     output = tester.generate(question, image, device)
-    print(output)
+    print('Model output: \n', output)

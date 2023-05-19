@@ -28,6 +28,9 @@ def get_model(model_name):
     elif model_name == 'instruct_blip':
         from .test_instructblip import TestInstructBLIP
         return TestInstructBLIP()
+    elif model_name == 'vpgtrans':
+        from .test_vpgtrans import TestVPGTrans
+        return TestVPGTrans()
     
     elif model_name == 'mmgpt':
         from .test_multimodel_gpt import TestMultiModelGPT

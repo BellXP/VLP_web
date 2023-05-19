@@ -1,61 +1,40 @@
+import os
+import gradio as gr
 import torch
-from peft import LoraConfig, get_peft_model
-from transformers import CLIPImageProcessor
-from .flamingo.modeling_flamingo import FlamingoForConditionalGeneration
+from PIL import Image
+from mmgpt.models.builder import create_model_and_transforms
 
-open_flamingo_path = '/nvme/data1/VLP_web_data/openflamingo-9b-hf'
-finetune_path = "/nvme/data1/VLP_web_data/Multimodel-GPT/mmgpt-lora-v0-release.pt"
+TEMPLATE = "Below is an instruction that describes a task. Write a response that appropriately completes the request."
+response_split = "### Response:"
+
+from peng_utils import DATA_DIR
+DATA_DIR = '/nvme/data1/VLP_web_data'
+llama_path = f'{DATA_DIR}/Multimodel-GPT/llama-7b-hf'
+open_flamingo_path = f'{DATA_DIR}/Multimodel-GPT/checkpoint.pt'
+finetune_path = f'{DATA_DIR}/Multimodel-GPT/mmgpt-lora-v0-release.pt'
 
 
-def get_prompt(message, have_image):
-    sep = "\n\n### "
-    format_dict = {"user_prefix": "Instruction", "ai_prefix": "Response"}
-    prompt_template = "Below is an instruction that describes a task. Write a response that appropriately completes the request."
+def get_prompt(message):
+    prompt_template=TEMPLATE
+    ai_prefix="Response"
+    user_prefix="Instruction"
+
+    format_dict = dict()
+    format_dict["user_prefix"] = user_prefix
+    format_dict["ai_prefix"] = ai_prefix
     prompt_template = prompt_template.format(**format_dict)
     ret = prompt_template
 
-    context = []
-    if have_image:
-        context.append(sep + "Image:\n<image>" + sep + 'Instruction' + ":\n" + message)
-    else:
-        context.append(sep + 'Instruction' + ":\n" + message)
-    context.append(sep + 'Response' + ":\n")
+    sep="\n\n### "
+    role = 'Instruction'
+    context = [sep + "Image:\n<image>" + sep + role + ":\n" + message]
+
     ret += "".join(context[::-1])
-    
     return ret
 
 
-def prepare_model_for_tuning(model: torch.nn.Module, config):
-    if config.lora:
-        lora_config = LoraConfig(
-            r=config.lora_r,
-            lora_alpha=config.lora_alpha,
-            target_modules=config.lora_target_modules,
-            lora_dropout=config.lora_dropout,
-            bias="none",  # won't use bias currently
-            modules_to_save=[],  # TODO: might be helpful if save partial model
-            task_type="VL",
-        )
-        model.lang_encoder = get_peft_model(model.lang_encoder, peft_config=lora_config)
-
-    # manually unfreeze modules, we use a `substring` fashion mathcing
-    for name, param in model.named_parameters():
-        if any(substr in name for substr in config.unfrozen):
-            param.requires_grad = True
-
-    return model
-
-
-class TestMultimodelGPT:
-    def __init__(self, finetune_path=finetune_path, open_flamingo_path=open_flamingo_path):
-        model = FlamingoForConditionalGeneration.from_pretrained(open_flamingo_path)
-        image_processor = CLIPImageProcessor()
-        text_tokenizer = model.text_tokenizer
-        text_tokenizer.padding_side = "left"
-        # text_tokenizer.add_eos_token = False
-        # text_tokenizer.bos_token_id = 1
-        # text_tokenizer.eos_token_id = 2
-
+class TestMultiModelGPT:
+    def __init__(self):
         ckpt = torch.load(finetune_path, map_location="cpu")
         if "model_state_dict" in ckpt:
             state_dict = ckpt["model_state_dict"]
@@ -71,43 +50,70 @@ class TestMultimodelGPT:
             print("tuning_config not found in checkpoint")
         else:
             print("tuning_config found in checkpoint: ", tuning_config)
-            model = prepare_model_for_tuning(model, tuning_config)
+        model, image_processor, tokenizer = create_model_and_transforms(
+            model_name="open_flamingo",
+            clip_vision_encoder_path="ViT-L-14",
+            clip_vision_encoder_pretrained="openai",
+            lang_encoder_path=llama_path,
+            tokenizer_path=llama_path,
+            pretrained_model_path=open_flamingo_path,
+            tuning_config=tuning_config,
+        )
         model.load_state_dict(state_dict, strict=False)
         model.eval()
-
+        tokenizer.padding_side = "left"
+        tokenizer.add_eos_token = False
         self.model = model
-        self.tokenizer = text_tokenizer
         self.image_processor = image_processor
+        self.tokenizer = tokenizer
 
-
-    def generate(self, text, image=None, device=None, keep_in_device=False):
-        # try:
+    def move_to_device(self, device=None):
         if device is not None and 'cuda' in device.type:
             dtype = torch.float16
-            self.model = self.model.to(device, dtype=dtype)
-            self.model.vision_encoder = self.model.vision_encoder.to('cpu', dtype=torch.float32)
+            self.model = self.model.half()
         else:
             dtype = torch.float32
-            self.model = self.model.to('cpu').float()
-    
-        prompt = get_prompt(text, image is not None)
+            device = torch.device('cpu')
+            self.model = self.model.float()
+        self.model = self.model.to(device)
+        
+        return device, dtype
+
+    def do_generate(self, prompt, images, device, max_new_token=512, num_beams=3, temperature=1.0,
+                 top_k=20, top_p=1.0, do_sample=True):
         lang_x = self.tokenizer([prompt], return_tensors="pt")
-        vision_x = (self.image_processor.preprocess([image], return_tensors="pt")["pixel_values"].unsqueeze(1).unsqueeze(0))
+        vision_x = [self.image_processor(im).unsqueeze(0) for im in images]
+        vision_x = torch.cat(vision_x, dim=0)
+        vision_x = vision_x.unsqueeze(1).unsqueeze(0)
+        if 'cuda' in device.type:
+            vision_x = vision_x.half()
 
         output_ids = self.model.generate(
-            # vision_x=vision_x.to(self.model.device),
-            vision_x=vision_x.to('cpu'),
-            lang_x=lang_x["input_ids"].to(self.model.device),
-            attention_mask=lang_x["attention_mask"].to(self.model.device, dtype=dtype),
-            max_new_tokens=256,
-            num_beams=1,
-            no_repeat_ngram_size=3,
-        )
-        result = self.tokenizer.decode(output_ids[0]) #, skip_special_tokens=True)
-        
-        if not keep_in_device:
-            self.model = self.model.to('cpu')
+            vision_x=vision_x.to(device),
+            lang_x=lang_x["input_ids"].to(device),
+            attention_mask=lang_x["attention_mask"].to(device),
+            max_new_tokens=max_new_token,
+            num_beams=num_beams,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            do_sample=do_sample,
+        )[0]
 
+        generated_text = self.tokenizer.decode(
+            output_ids, skip_special_tokens=True)
+        # print(generated_text)
+        result = generated_text.split(response_split)[-1].strip()
         return result
+
+    def generate(self, question, raw_image, device=None, keep_in_device=False):
+        # try:
+        device, dtype = self.move_to_device(device)
+        output = self.do_generate(get_prompt(question), [raw_image], device)
+
+        if not keep_in_device:
+            self.move_to_device()
+        
+        return output
         # except Exception as e:
         #     return getattr(e, 'message', str(e))

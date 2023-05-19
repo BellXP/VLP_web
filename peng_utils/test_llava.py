@@ -43,7 +43,7 @@ class KeywordsStoppingCriteria(StoppingCriteria):
 
 
 class TestLLaVA:
-    def __init__(self, model_path="liuhaotian/LLaVA-Lightning-MPT-7B-preview"):
+    def __init__(self, model_path="liuhaotian/LLaVA-7b-delta-v0"):
         device, dtype = 'cpu', torch.float32
 
         tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -125,6 +125,16 @@ class TestLLaVA:
             if n_diff_input_output > 0:
                 print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
             outputs = self.tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
+
+            if self.conv_mode == 'simple_legacy' or self.conv_mode == 'simple':
+                while True:
+                    cur_len = len(outputs)
+                    outputs = outputs.strip()
+                    for pattern in ['###', 'Assistant:', 'Response:']:
+                        if outputs.startswith(pattern):
+                            outputs = outputs[len(pattern):].strip()
+                    if len(outputs) == cur_len:
+                        break
 
             try:
                 index = outputs.index(conv.sep)

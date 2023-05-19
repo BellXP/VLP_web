@@ -163,9 +163,9 @@ class LlavaLlamaModel(LlamaModel):
                 else:
                     cur_image_features = image_features[cur_image_idx]
                     num_patches = cur_image_features.shape[0]
-                    if (cur_input_ids == vision_tower.config.im_patch_token).sum() < num_patches:
+                    if (cur_input_ids == vision_tower.config.im_patch_token).sum() != num_patches:
                         raise ValueError("The number of image patch tokens should be the same as the number of image patches.")
-                    masked_indices = torch.where(cur_input_ids == vision_tower.config.im_patch_token)[0][-num_patches:]
+                    masked_indices = torch.where(cur_input_ids == vision_tower.config.im_patch_token)[0]
                     mask_index_start = masked_indices[0]
                     if (masked_indices != torch.arange(mask_index_start, mask_index_start+num_patches, device=masked_indices.device, dtype=masked_indices.dtype)).any():
                         raise ValueError("The image patch tokens should be consecutive.")

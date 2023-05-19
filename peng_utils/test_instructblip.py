@@ -1,8 +1,7 @@
 import torch
 from transformers import CLIPImageProcessor
-from lavis.models import load_model_and_preprocess
-
-from lavis.models.eva_vit import convert_weights_to_fp16
+from .instruct_blip.models import load_model_and_preprocess
+from .instruct_blip.models.eva_vit import convert_weights_to_fp16
 
 
 class TestInstructBLIP:

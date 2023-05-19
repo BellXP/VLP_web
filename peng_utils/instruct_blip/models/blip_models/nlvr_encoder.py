@@ -3,39 +3,18 @@
  All rights reserved.
  SPDX-License-Identifier: BSD-3-Clause
  For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
- 
- Based on huggingface code base
- https://github.com/huggingface/transformers/blob/v4.15.0/src/transformers/models/bert
 """
 
 import math
-import os
-import warnings
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
-from torch import Tensor, device
 import torch.utils.checkpoint
-from torch import nn
-from torch.nn import CrossEntropyLoss
-import torch.nn.functional as F
-from transformers import BatchEncoding, PreTrainedTokenizer
-
+from torch import Tensor, device, nn
 from transformers.activations import ACT2FN
-from transformers.file_utils import (
-    ModelOutput,
-)
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
-    CausalLMOutputWithCrossAttentions,
-    MaskedLMOutput,
-    MultipleChoiceModelOutput,
-    NextSentencePredictorOutput,
-    QuestionAnsweringModelOutput,
-    SequenceClassifierOutput,
-    TokenClassifierOutput,
 )
 from transformers.modeling_utils import (
     PreTrainedModel,
@@ -43,13 +22,9 @@ from transformers.modeling_utils import (
     find_pruneable_heads_and_indices,
     prune_linear_layer,
 )
-from transformers.utils import logging
 from transformers.models.bert.configuration_bert import BertConfig
-from ..common.utils import get_abs_path
+from transformers.utils import logging
 
-from .base_model import BaseEncoder
-
-logging.set_verbosity_error()
 logger = logging.get_logger(__name__)
 
 
@@ -64,11 +39,6 @@ class BertEmbeddings(nn.Module):
         self.position_embeddings = nn.Embedding(
             config.max_position_embeddings, config.hidden_size
         )
-
-        if config.add_type_embeddings:
-            self.token_type_embeddings = nn.Embedding(
-                config.type_vocab_size, config.hidden_size
-            )
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
@@ -88,7 +58,6 @@ class BertEmbeddings(nn.Module):
     def forward(
         self,
         input_ids=None,
-        token_type_ids=None,
         position_ids=None,
         inputs_embeds=None,
         past_key_values_length=0,
@@ -108,12 +77,7 @@ class BertEmbeddings(nn.Module):
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
 
-        if token_type_ids is not None:
-            token_type_embeddings = self.token_type_embeddings(token_type_ids)
-
-            embeddings = inputs_embeds + token_type_embeddings
-        else:
-            embeddings = inputs_embeds
+        embeddings = inputs_embeds
 
         if self.position_embedding_type == "absolute":
             position_embeddings = self.position_embeddings(position_ids)
@@ -290,24 +254,53 @@ class BertSelfAttention(nn.Module):
 
 
 class BertSelfOutput(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, twin=False, merge=False):
         super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        if twin:
+            self.dense0 = nn.Linear(config.hidden_size, config.hidden_size)
+            self.dense1 = nn.Linear(config.hidden_size, config.hidden_size)
+        else:
+            self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        if merge:
+            self.act = ACT2FN[config.hidden_act]
+            self.merge_layer = nn.Linear(config.hidden_size * 2, config.hidden_size)
+            self.merge = True
+        else:
+            self.merge = False
 
     def forward(self, hidden_states, input_tensor):
-        hidden_states = self.dense(hidden_states)
+        if type(hidden_states) == list:
+            hidden_states0 = self.dense0(hidden_states[0])
+            hidden_states1 = self.dense1(hidden_states[1])
+            if self.merge:
+                # hidden_states = self.merge_layer(self.act(torch.cat([hidden_states0,hidden_states1],dim=-1)))
+                hidden_states = self.merge_layer(
+                    torch.cat([hidden_states0, hidden_states1], dim=-1)
+                )
+            else:
+                hidden_states = (hidden_states0 + hidden_states1) / 2
+        else:
+            hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
 
 
 class BertAttention(nn.Module):
-    def __init__(self, config, is_cross_attention=False):
+    def __init__(self, config, is_cross_attention=False, layer_num=-1):
         super().__init__()
-        self.self = BertSelfAttention(config, is_cross_attention)
-        self.output = BertSelfOutput(config)
+        if is_cross_attention:
+            self.self0 = BertSelfAttention(config, is_cross_attention)
+            self.self1 = BertSelfAttention(config, is_cross_attention)
+        else:
+            self.self = BertSelfAttention(config, is_cross_attention)
+        self.output = BertSelfOutput(
+            config,
+            twin=is_cross_attention,
+            merge=(is_cross_attention and layer_num >= 6),
+        )
         self.pruned_heads = set()
 
     def prune_heads(self, heads):
@@ -343,19 +336,46 @@ class BertAttention(nn.Module):
         past_key_value=None,
         output_attentions=False,
     ):
-        self_outputs = self.self(
-            hidden_states,
-            attention_mask,
-            head_mask,
-            encoder_hidden_states,
-            encoder_attention_mask,
-            past_key_value,
-            output_attentions,
-        )
-        attention_output = self.output(self_outputs[0], hidden_states)
-        outputs = (attention_output,) + self_outputs[
-            1:
-        ]  # add attentions if we output them
+        if type(encoder_hidden_states) == list:
+            self_outputs0 = self.self0(
+                hidden_states,
+                attention_mask,
+                head_mask,
+                encoder_hidden_states[0],
+                encoder_attention_mask[0],
+                past_key_value,
+                output_attentions,
+            )
+            self_outputs1 = self.self1(
+                hidden_states,
+                attention_mask,
+                head_mask,
+                encoder_hidden_states[1],
+                encoder_attention_mask[1],
+                past_key_value,
+                output_attentions,
+            )
+            attention_output = self.output(
+                [self_outputs0[0], self_outputs1[0]], hidden_states
+            )
+
+            outputs = (attention_output,) + self_outputs0[
+                1:
+            ]  # add attentions if we output them
+        else:
+            self_outputs = self.self(
+                hidden_states,
+                attention_mask,
+                head_mask,
+                encoder_hidden_states,
+                encoder_attention_mask,
+                past_key_value,
+                output_attentions,
+            )
+            attention_output = self.output(self_outputs[0], hidden_states)
+            outputs = (attention_output,) + self_outputs[
+                1:
+            ]  # add attentions if we output them
         return outputs
 
 
@@ -396,25 +416,11 @@ class BertLayer(nn.Module):
         self.seq_len_dim = 1
         self.attention = BertAttention(config)
         self.layer_num = layer_num
-
-        # compatibility for ALBEF and BLIP
-        try:
-            # ALBEF & ALPRO
-            fusion_layer = self.config.fusion_layer
-            add_cross_attention = (
-                fusion_layer <= layer_num and self.config.add_cross_attention
-            )
-
-            self.fusion_layer = fusion_layer
-        except AttributeError:
-            # BLIP
-            self.fusion_layer = self.config.num_hidden_layers
-            add_cross_attention = self.config.add_cross_attention
-
-        # if self.config.add_cross_attention:
-        if add_cross_attention:
+        if self.config.add_cross_attention:
             self.crossattention = BertAttention(
-                config, is_cross_attention=self.config.add_cross_attention
+                config,
+                is_cross_attention=self.config.add_cross_attention,
+                layer_num=layer_num,
             )
         self.intermediate = BertIntermediate(config)
         self.output = BertOutput(config)
@@ -446,44 +452,22 @@ class BertLayer(nn.Module):
         outputs = self_attention_outputs[1:-1]
         present_key_value = self_attention_outputs[-1]
 
-        # TODO line 482 in albef/models/xbert.py
-        # compatibility for ALBEF and BLIP
-        if mode in ["multimodal", "fusion"] and hasattr(self, "crossattention"):
+        if mode == "multimodal":
             assert (
                 encoder_hidden_states is not None
             ), "encoder_hidden_states must be given for cross-attention layers"
-
-            if isinstance(encoder_hidden_states, list):
-                cross_attention_outputs = self.crossattention(
-                    attention_output,
-                    attention_mask,
-                    head_mask,
-                    encoder_hidden_states[
-                        (self.layer_num - self.fusion_layer)
-                        % len(encoder_hidden_states)
-                    ],
-                    encoder_attention_mask[
-                        (self.layer_num - self.fusion_layer)
-                        % len(encoder_hidden_states)
-                    ],
-                    output_attentions=output_attentions,
-                )
-                attention_output = cross_attention_outputs[0]
-                outputs = outputs + cross_attention_outputs[1:-1]
-
-            else:
-                cross_attention_outputs = self.crossattention(
-                    attention_output,
-                    attention_mask,
-                    head_mask,
-                    encoder_hidden_states,
-                    encoder_attention_mask,
-                    output_attentions=output_attentions,
-                )
-                attention_output = cross_attention_outputs[0]
-                outputs = (
-                    outputs + cross_attention_outputs[1:-1]
-                )  # add cross attentions if we output attention weights
+            cross_attention_outputs = self.crossattention(
+                attention_output,
+                attention_mask,
+                head_mask,
+                encoder_hidden_states,
+                encoder_attention_mask,
+                output_attentions=output_attentions,
+            )
+            attention_output = cross_attention_outputs[0]
+            outputs = (
+                outputs + cross_attention_outputs[1:-1]
+            )  # add cross attentions if we output attention weights
         layer_output = apply_chunking_to_forward(
             self.feed_forward_chunk,
             self.chunk_size_feed_forward,
@@ -533,30 +517,7 @@ class BertEncoder(nn.Module):
 
         next_decoder_cache = () if use_cache else None
 
-        try:
-            # ALBEF
-            fusion_layer = self.config.fusion_layer
-        except AttributeError:
-            # BLIP
-            fusion_layer = self.config.num_hidden_layers
-
-        if mode == "text":
-            start_layer = 0
-            # output_layer = self.config.fusion_layer
-            output_layer = fusion_layer
-
-        elif mode == "fusion":
-            # start_layer = self.config.fusion_layer
-            start_layer = fusion_layer
-            output_layer = self.config.num_hidden_layers
-
-        elif mode == "multimodal":
-            start_layer = 0
-            output_layer = self.config.num_hidden_layers
-
-        # compatibility for ALBEF and BLIP
-        # for i in range(self.config.num_hidden_layers):
-        for i in range(start_layer, output_layer):
+        for i in range(self.config.num_hidden_layers):
             layer_module = self.layer[i]
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
@@ -564,7 +525,6 @@ class BertEncoder(nn.Module):
             layer_head_mask = head_mask[i] if head_mask is not None else None
             past_key_value = past_key_values[i] if past_key_values is not None else None
 
-            # TODO pay attention to this.
             if self.gradient_checkpointing and self.training:
 
                 if use_cache:
@@ -833,7 +793,6 @@ class BertModel(BertPreTrainedModel):
         self,
         input_ids=None,
         attention_mask=None,
-        token_type_ids=None,
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
@@ -964,7 +923,6 @@ class BertModel(BertPreTrainedModel):
             embedding_output = self.embeddings(
                 input_ids=input_ids,
                 position_ids=position_ids,
-                token_type_ids=token_type_ids,
                 inputs_embeds=inputs_embeds,
                 past_key_values_length=past_key_values_length,
             )
@@ -1000,417 +958,3 @@ class BertModel(BertPreTrainedModel):
             attentions=encoder_outputs.attentions,
             cross_attentions=encoder_outputs.cross_attentions,
         )
-
-
-class BertForMaskedLM(BertPreTrainedModel):
-
-    _keys_to_ignore_on_load_unexpected = [r"pooler"]
-    _keys_to_ignore_on_load_missing = [r"position_ids", r"predictions.decoder.bias"]
-
-    def __init__(self, config):
-        super().__init__(config)
-
-        self.bert = BertModel(config, add_pooling_layer=False)
-        self.cls = BertOnlyMLMHead(config)
-
-        self.init_weights()
-
-    def get_output_embeddings(self):
-        return self.cls.predictions.decoder
-
-    def set_output_embeddings(self, new_embeddings):
-        self.cls.predictions.decoder = new_embeddings
-
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        # token_type_ids=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        encoder_embeds=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        labels=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-        is_decoder=False,
-        mode="multimodal",
-        soft_labels=None,
-        alpha=0,
-        return_logits=False,
-    ):
-        r"""
-        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-            Labels for computing the masked language modeling loss. Indices should be in ``[-100, 0, ...,
-            config.vocab_size]`` (see ``input_ids`` docstring) Tokens with indices set to ``-100`` are ignored
-            (masked), the loss is only computed for the tokens with labels in ``[0, ..., config.vocab_size]``
-        """
-
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
-        outputs = self.bert(
-            input_ids,
-            attention_mask=attention_mask,
-            # token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            encoder_embeds=encoder_embeds,
-            encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-            is_decoder=is_decoder,
-            mode=mode,
-        )
-
-        sequence_output = outputs[0]
-        prediction_scores = self.cls(sequence_output)
-
-        if return_logits:
-            return prediction_scores
-
-        masked_lm_loss = None
-        if labels is not None:
-            loss_fct = CrossEntropyLoss()  # -100 index = padding token
-            masked_lm_loss = loss_fct(
-                prediction_scores.view(-1, self.config.vocab_size), labels.view(-1)
-            )
-
-        if soft_labels is not None:
-            loss_distill = -torch.sum(
-                F.log_softmax(prediction_scores, dim=-1) * soft_labels, dim=-1
-            )
-            loss_distill = loss_distill[labels != -100].mean()
-            masked_lm_loss = (1 - alpha) * masked_lm_loss + alpha * loss_distill
-
-        if not return_dict:
-            output = (prediction_scores,) + outputs[2:]
-            return (
-                ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
-            )
-
-        return MaskedLMOutput(
-            loss=masked_lm_loss,
-            logits=prediction_scores,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
-
-    def prepare_inputs_for_generation(
-        self, input_ids, attention_mask=None, **model_kwargs
-    ):
-        input_shape = input_ids.shape
-        effective_batch_size = input_shape[0]
-
-        #  add a dummy token
-        assert (
-            self.config.pad_token_id is not None
-        ), "The PAD token should be defined for generation"
-        attention_mask = torch.cat(
-            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))],
-            dim=-1,
-        )
-        dummy_token = torch.full(
-            (effective_batch_size, 1),
-            self.config.pad_token_id,
-            dtype=torch.long,
-            device=input_ids.device,
-        )
-        input_ids = torch.cat([input_ids, dummy_token], dim=1)
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
-
-
-class BertLMHeadModel(BertPreTrainedModel):
-
-    _keys_to_ignore_on_load_unexpected = [r"pooler"]
-    _keys_to_ignore_on_load_missing = [r"position_ids", r"predictions.decoder.bias"]
-
-    def __init__(self, config):
-        super().__init__(config)
-
-        self.bert = BertModel(config, add_pooling_layer=False)
-        self.cls = BertOnlyMLMHead(config)
-
-        self.init_weights()
-
-    def get_output_embeddings(self):
-        return self.cls.predictions.decoder
-
-    def set_output_embeddings(self, new_embeddings):
-        self.cls.predictions.decoder = new_embeddings
-
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        labels=None,
-        past_key_values=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-        return_logits=False,
-        is_decoder=True,
-        reduction="mean",
-        mode="multimodal",
-        soft_labels=None,
-        alpha=0,
-    ):
-        r"""
-        encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
-            Sequence of hidden-states at the output of the last layer of the encoder. Used in the cross-attention if
-            the model is configured as a decoder.
-        encoder_attention_mask (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-            Mask to avoid performing attention on the padding token indices of the encoder input. This mask is used in
-            the cross-attention if the model is configured as a decoder. Mask values selected in ``[0, 1]``:
-            - 1 for tokens that are **not masked**,
-            - 0 for tokens that are **masked**.
-        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-            Labels for computing the left-to-right language modeling loss (next word prediction). Indices should be in
-            ``[-100, 0, ..., config.vocab_size]`` (see ``input_ids`` docstring) Tokens with indices set to ``-100`` are
-            ignored (masked), the loss is only computed for the tokens with labels n ``[0, ..., config.vocab_size]``
-        past_key_values (:obj:`tuple(tuple(torch.FloatTensor))` of length :obj:`config.n_layers` with each tuple having 4 tensors of shape :obj:`(batch_size, num_heads, sequence_length - 1, embed_size_per_head)`):
-            Contains precomputed key and value hidden states of the attention blocks. Can be used to speed up decoding.
-            If :obj:`past_key_values` are used, the user can optionally input only the last :obj:`decoder_input_ids`
-            (those that don't have their past key value states given to this model) of shape :obj:`(batch_size, 1)`
-            instead of all :obj:`decoder_input_ids` of shape :obj:`(batch_size, sequence_length)`.
-        use_cache (:obj:`bool`, `optional`):
-            If set to :obj:`True`, :obj:`past_key_values` key value states are returned and can be used to speed up
-            decoding (see :obj:`past_key_values`).
-        Returns:
-        Example::
-            >>> from transformers import BertTokenizer, BertLMHeadModel, BertConfig
-            >>> import torch
-            >>> tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
-            >>> config = BertConfig.from_pretrained("bert-base-cased")
-            >>> model = BertLMHeadModel.from_pretrained('bert-base-cased', config=config)
-            >>> inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
-            >>> outputs = model(**inputs)
-            >>> prediction_logits = outputs.logits
-        """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-        if labels is not None:
-            use_cache = False
-
-        outputs = self.bert(
-            input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_attention_mask,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-            is_decoder=is_decoder,
-            mode=mode,
-        )
-
-        sequence_output = outputs[0]
-        prediction_scores = self.cls(sequence_output)
-
-        if return_logits:
-            return prediction_scores[:, :-1, :].contiguous()
-
-        lm_loss = None
-        if labels is not None:
-            # we are doing next-token prediction; shift prediction scores and input ids by one
-            shifted_prediction_scores = prediction_scores[:, :-1, :].contiguous()
-            labels = labels[:, 1:].contiguous()
-            loss_fct = CrossEntropyLoss(reduction=reduction, label_smoothing=0.1)
-            lm_loss = loss_fct(
-                shifted_prediction_scores.view(-1, self.config.vocab_size),
-                labels.view(-1),
-            )
-            if reduction == "none":
-                lm_loss = lm_loss.view(prediction_scores.size(0), -1).sum(1)
-
-        if soft_labels is not None:
-            loss_distill = -torch.sum(
-                F.log_softmax(shifted_prediction_scores, dim=-1) * soft_labels, dim=-1
-            )
-            loss_distill = (loss_distill * (labels != -100)).sum(1)
-            lm_loss = (1 - alpha) * lm_loss + alpha * loss_distill
-
-        if not return_dict:
-            output = (prediction_scores,) + outputs[2:]
-            return ((lm_loss,) + output) if lm_loss is not None else output
-
-        return CausalLMOutputWithCrossAttentions(
-            loss=lm_loss,
-            logits=prediction_scores,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-            cross_attentions=outputs.cross_attentions,
-        )
-
-    def prepare_inputs_for_generation(
-        self, input_ids, past=None, attention_mask=None, **model_kwargs
-    ):
-        input_shape = input_ids.shape
-        # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
-        if attention_mask is None:
-            attention_mask = input_ids.new_ones(input_shape)
-
-        # cut decoder_input_ids if past is used
-        if past is not None:
-            input_ids = input_ids[:, -1:]
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "past_key_values": past,
-            "encoder_hidden_states": model_kwargs.get("encoder_hidden_states", None),
-            "encoder_attention_mask": model_kwargs.get("encoder_attention_mask", None),
-            "is_decoder": True,
-        }
-
-    def _reorder_cache(self, past, beam_idx):
-        reordered_past = ()
-        for layer_past in past:
-            reordered_past += (
-                tuple(
-                    past_state.index_select(0, beam_idx) for past_state in layer_past
-                ),
-            )
-        return reordered_past
-
-
-class XBertLMHeadDecoder(BertLMHeadModel):
-    """
-    This class decouples the decoder forward logic from the VL model.
-    In this way, different VL models can share this decoder as long as
-    they feed encoder_embeds as required.
-    """
-
-    @classmethod
-    def from_config(cls, cfg, from_pretrained=False):
-
-        med_config_path = get_abs_path(cfg.get("med_config_path"))
-        med_config = BertConfig.from_json_file(med_config_path)
-
-        if from_pretrained:
-            return cls.from_pretrained("bert-base-uncased", config=med_config)
-        else:
-            return cls(config=med_config)
-
-    def generate_from_encoder(
-        self,
-        tokenized_prompt,
-        visual_embeds,
-        sep_token_id,
-        pad_token_id,
-        use_nucleus_sampling=False,
-        num_beams=3,
-        max_length=30,
-        min_length=10,
-        top_p=0.9,
-        repetition_penalty=1.0,
-        **kwargs
-    ):
-
-        if not use_nucleus_sampling:
-            num_beams = num_beams
-            visual_embeds = visual_embeds.repeat_interleave(num_beams, dim=0)
-
-        image_atts = torch.ones(visual_embeds.size()[:-1], dtype=torch.long).to(
-            self.device
-        )
-
-        model_kwargs = {
-            "encoder_hidden_states": visual_embeds,
-            "encoder_attention_mask": image_atts,
-        }
-
-        if use_nucleus_sampling:
-            # nucleus sampling
-            outputs = self.generate(
-                input_ids=tokenized_prompt.input_ids,
-                max_length=max_length,
-                min_length=min_length,
-                do_sample=True,
-                top_p=top_p,
-                num_return_sequences=1,
-                eos_token_id=sep_token_id,
-                pad_token_id=pad_token_id,
-                repetition_penalty=1.1,
-                **model_kwargs
-            )
-        else:
-            # beam search
-            outputs = self.generate(
-                input_ids=tokenized_prompt.input_ids,
-                max_length=max_length,
-                min_length=min_length,
-                num_beams=num_beams,
-                eos_token_id=sep_token_id,
-                pad_token_id=pad_token_id,
-                repetition_penalty=repetition_penalty,
-                **model_kwargs
-            )
-
-        return outputs
-
-
-class XBertEncoder(BertModel, BaseEncoder):
-    @classmethod
-    def from_config(cls, cfg, from_pretrained=False):
-
-        med_config_path = get_abs_path(cfg.get("med_config_path"))
-        med_config = BertConfig.from_json_file(med_config_path)
-
-        if from_pretrained:
-            return cls.from_pretrained(
-                "bert-base-uncased", config=med_config, add_pooling_layer=False
-            )
-        else:
-            return cls(config=med_config, add_pooling_layer=False)
-
-    def forward_automask(self, tokenized_text, visual_embeds, **kwargs):
-        image_atts = torch.ones(visual_embeds.size()[:-1], dtype=torch.long).to(
-            self.device
-        )
-
-        text = tokenized_text
-        text_output = super().forward(
-            text.input_ids,
-            attention_mask=text.attention_mask,
-            encoder_hidden_states=visual_embeds,
-            encoder_attention_mask=image_atts,
-            return_dict=True,
-        )
-
-        return text_output
-
-    def forward_text(self, tokenized_text, **kwargs):
-        text = tokenized_text
-        token_type_ids = kwargs.get("token_type_ids", None)
-
-        text_output = super().forward(
-            text.input_ids,
-            attention_mask=text.attention_mask,
-            token_type_ids=token_type_ids,
-            return_dict=True,
-            mode="text",
-        )
-
-        return text_output

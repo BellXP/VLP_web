@@ -104,7 +104,7 @@ class TestLLaVA:
             device = 'cpu'
         vision_tower = self.model.get_model().vision_tower[0]
         vision_tower.to(device=device, dtype=dtype)
-        self.model.to(device=device)
+        self.model.to(device=device, dtype=dtype)
         
         return device, dtype
     
@@ -118,7 +118,7 @@ class TestLLaVA:
             conv.append_message(conv.roles[1], None)
             prompt = conv.get_prompt()
             stop_str = conv.sep if conv.sep_style in [SeparatorStyle.SINGLE, SeparatorStyle.MPT] else conv.sep2
-            output = self.do_generate(prompt, image, stop_str=stop_str)
+            output = self.do_generate(prompt, image, stop_str=stop_str, dtype=dtype)
 
             if not keep_in_device:
                 self.move_to_device()

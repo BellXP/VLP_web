@@ -34,10 +34,6 @@ def get_model(model_name):
     elif model_name == 'llava':
         from .test_llava import TestLLaVA
         return TestLLaVA()
-    
-    elif model_name == 'mmgpt':
-        from .test_multimodel_gpt import TestMultiModelGPT
-        return TestMultiModelGPT()
     else:
         raise ValueError(f"Invalid model_name: {model_name}")
 

@@ -5,7 +5,7 @@ from .mplug_owl.tokenization_mplug_owl import MplugOwlTokenizer
 
 
 class TestMplugOwl:
-    def __init__(self, model_path='MAGAer13/mplug-owl-llama-7b-ft'):
+    def __init__(self, model_path='MAGAer13/mplug-owl-llama-7b'):
         self.model = MplugOwlForConditionalGeneration.from_pretrained(model_path, torch_dtype=torch.float32)
         self.image_processor = MplugOwlImageProcessor.from_pretrained(model_path)
         self.tokenizer = MplugOwlTokenizer.from_pretrained(model_path)

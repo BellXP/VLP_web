@@ -16,7 +16,7 @@ class TestInstructBLIP:
             dtype = torch.float32
             device = 'cpu'
             self.model.visual_encoder = self.model.visual_encoder.to(device, dtype=dtype)
-        self.model = self.model.to(device)
+        self.model = self.model.to(device, dtype=dtype)
         self.model.llm_model = self.model.llm_model.to(device, dtype=dtype)
         
         return device, dtype

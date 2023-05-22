@@ -40,7 +40,8 @@ model_info = {
     'instruct_blip': 'InstructBLIP-7B',
     'vpgtrans': 'VPGTrans-7B',
     'llava': 'LLava-7B',
-    'llama_adapter_v2': 'LLama-Adapter-V2-7B'
+    'llama_adapter_v2': 'LLama-Adapter-V2-7B',
+    'mmgpt': 'Multimodal-GPT-7B'
 }
 
 
